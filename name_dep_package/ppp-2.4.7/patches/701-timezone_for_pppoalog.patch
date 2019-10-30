@@ -1,0 +1,33 @@
+--- a/pppd/utils.c	2014-08-09 20:31:39.000000000 +0800
++++ b/pppd/utils.c	2017-07-24 15:13:28.005002523 +0800
+@@ -51,6 +51,7 @@
+ #include <sys/stat.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
++
+ #ifdef SVR4
+ #include <sys/mkdev.h>
+ #endif
+@@ -642,8 +643,20 @@
+     va_list args;
+ {
+     char buf[1024];
+-
+-    vslprintf(buf, sizeof(buf), fmt, args);
++	char tmp[100];
++	int len = 0;
++	//time_t now;
++	//now = time(NULL);
++	
++	time_t rawtime;
++	struct tm *timeinfo;
++	char buffer[100];
++	time(&rawtime);
++	timeinfo = localtime(&rawtime);
++	strftime(tmp, sizeof(tmp),"%d:%m:%Y %I:%M:%S", timeinfo);
++	len = sprintf(buf, "[%s] ", tmp);
++	
++    vslprintf(buf + len, sizeof(buf) - len, fmt, args);
+     log_write(level, buf);
+ }
+ 

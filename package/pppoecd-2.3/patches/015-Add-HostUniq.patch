@@ -1,0 +1,130 @@
+diff -Naur a/pppd/plugins/pppoe/libpppoe.c b/pppd/plugins/pppoe/libpppoe.c
+--- a/pppd/plugins/pppoe/libpppoe.c	2017-11-02 16:18:12.288601867 +0800
++++ b/pppd/plugins/pppoe/libpppoe.c	2017-12-21 19:06:59.178245835 +0800
+@@ -43,6 +43,7 @@
+ 
+ #define TAG_DATA(type,tag_ptr) ((type *) ((struct pppoe_tag*)tag_ptr)->tag_data)
+ 
++extern char *hostuniq; /* Use Host-Uniq tag */
+ 
+ /***************************************************************************
+  *
+@@ -421,11 +422,13 @@
+     /* A HOST_UNIQ must be present */
+     CHECK_TAG(TAG_HOST_UNIQ,1);
+ 
+-    hu_val = *TAG_DATA(struct session* ,p->tags[TAG_HOST_UNIQ]);
++    if(!hostuniq){ /* if user sets HOST_UNIQ himself */
++        hu_val = *TAG_DATA(struct session* ,p->tags[TAG_HOST_UNIQ]);
+ 
+-    if( hu_val != ses ){
+-	poe_info(ses,"HOST_UNIQ mismatch: %08x %i\n",(int)hu_val,getpid());
+-	return -1;
++        if( hu_val != ses ){
++    	poe_info(ses,"HOST_UNIQ mismatch: %08x %i\n",(int)hu_val,getpid());
++    	return -1;
++        }
+     }
+ 
+     if(ses->filt->htag &&
+@@ -744,3 +747,37 @@
+     }
+     return pt;
+ }
++
++struct pppoe_tag *make_filter_tag_HostUniq(short type, short length, char* data){
++    struct pppoe_tag *pt =
++	(struct pppoe_tag* )malloc( sizeof(struct pppoe_tag) + length );
++
++    if(pt == NULL) return NULL;
++
++    if(length>0 && data){
++        int i, len = strlen(data);
++#define hex(x) \
++        (((x) <= '9') ? ((x) - '0') : \
++            (((x) <= 'F') ? ((x) - 'A' + 10) : \
++                ((x) - 'a' + 10)))
++
++        if (len % 2)
++            return NULL;
++
++        for (i = 0; i < len; i += 2)
++        {
++            if (!isxdigit(data[i]) || !isxdigit(data[i+1]))
++                return NULL;
++
++            pt->tag_data[i / 2] = (char)(16 * hex(data[i]) + hex(data[i+1]));
++        }
++#undef hex
++        pt->tag_type = PTT_HOST_UNIQ;
++        pt->tag_len = htons(len / 2);
++    }
++	else {
++        pt->tag_len=htons(length);
++        pt->tag_type=type;
++	}
++    return pt;
++}
+
+diff -Naur a/pppoecd/options.c b/pppoecd/options.c
+--- a/pppoecd/options.c	2017-11-02 16:18:12.288601867 +0800
++++ b/pppoecd/options.c	2017-12-21 18:47:38.434668082 +0800
+@@ -78,6 +78,7 @@
+ 
+ extern char *pppoe_ac_name;
+ extern char *pppoe_srv_name;
++extern char *hostuniq;         /* Use Host-Uniq tag */
+ extern int lcp_echo_interval;  /* Interval between LCP echo-requests */
+ extern int lcp_echo_fails;     /* Tolerance to unanswered echo-requests */
+ extern int retry_num;	       /* interval of send disc */
+@@ -87,7 +88,7 @@
+ 
+ extern int setdevname_pppoe(const char *cp);
+ 
+-static char *usage_string = "usage: %s interface -d -k [-i idle] [-u username] [-p passwd] [-a acname] [-s srvname] [-r mru] [-t mtu] [-I lcp_echo_interval] [-T lcp_echo_fails] [-P ipparam] [-L Local IP] [-N retry_num] [-R set default route] [-n use unnumber ip] [-C disconnected function] [-h holdoff] [-v retransmit timebase] [-V retransmit timebase2] [-m max retransmit time]\n";
++static char *usage_string = "usage: %s interface -d -k [-i idle] [-u username] [-p passwd] [-a acname] [-s srvname] [-r mru] [-t mtu] [-I lcp_echo_interval] [-T lcp_echo_fails] [-P ipparam] [-L Local IP] [-N retry_num] [-R set default route] [-n use unnumber ip] [-C disconnected function] [-h holdoff] [-v retransmit timebase] [-V retransmit timebase2] [-m max retransmit time] [-H hostuniq]\n";
+ 
+ /*
+  * parse_args - parse a string of arguments from the command line.
+@@ -101,7 +102,7 @@
+     struct in_addr Laddr;
+     //struct in_addr Naddr;
+ 
+-    while ((opt = getopt(argc, argv, "dki:u:p:a:s:r:t:U:I:T:P:L:N:RnC:v:x:D:M:h:F:V:m:")) != -1) {
++    while ((opt = getopt(argc, argv, "dki:u:p:a:s:H:r:t:U:I:T:P:L:N:RnC:v:x:D:M:h:F:V:m:")) != -1) {
+ 	    switch (opt) {
+ 	    case 'd':
+ 		    debug = nodetach = 1;
+@@ -127,6 +128,9 @@
+ 	    case 's':
+ 		    pppoe_srv_name = optarg;
+ 		    break;
++		case 'H':
++		    hostuniq = optarg;
++		    break;
+ 	    case 'r':
+ 		    lcp_wantoptions[0].neg_mru = 1;
+ 		    lcp_wantoptions[0].mru = atoi(optarg);
+diff -Naur a/pppoecd/pppoe.c b/pppoecd/pppoe.c
+--- a/pppoecd/pppoe.c	2011-06-23 17:28:10.000000000 +0800
++++ b/pppoecd/pppoe.c	2017-12-21 18:49:21.132534561 +0800
+@@ -154,7 +154,7 @@
+     }
+ 
+     if (hostuniq) {
+-	ses->filt->htag = make_filter_tag(PTT_HOST_UNIQ,
++	ses->filt->htag = make_filter_tag_HostUniq(PTT_HOST_UNIQ,
+ 					  strlen(hostuniq),
+ 					  hostuniq);
+ 	if ( ses->filt->htag == NULL) {
+diff -Naur a/pppoecd/pppoe.h b/pppoecd/pppoe.h
+--- a/pppoecd/pppoe.h	2017-11-02 16:18:12.288601867 +0800
++++ b/pppoecd/pppoe.h	2017-12-21 18:47:38.438668170 +0800
+@@ -163,6 +163,7 @@
+ 
+ 
+ struct pppoe_tag *make_filter_tag(short type, short length, char* data);
++struct pppoe_tag *make_filter_tag_HostUniq(short type, short length, char* data);
+ 
+ /* Session type definitions */
+ #define SESSION_CLIENT	0

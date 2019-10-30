@@ -1,0 +1,145 @@
+--- a/src/dnsmasq.c	2017-10-19 16:19:15.313294300 +0800
++++ b/src/dnsmasq.c	2017-10-19 16:21:35.595709560 +0800
+@@ -32,6 +32,10 @@
+ static int read_event(int fd, struct event_desc *evp, char **msg);
+ static void poll_resolv(int force, int do_reload, time_t now);
+ 
++#ifdef DIRECT_DOMAIN_TO_LANIP
++static void get_lan_ip();
++#endif
++
+ int main (int argc, char **argv)
+ {
+   int bind_fallback = 0;
+@@ -1249,6 +1253,9 @@
+ 	  {
+ 	    if (daemon->resolv_files && option_bool(OPT_NO_POLL))
+ 	      {
++#ifdef DIRECT_DOMAIN_TO_LANIP
++	    get_lan_ip();
++#endif
+ 		reload_servers(daemon->resolv_files->name);
+ 		check = 1;
+ 	      }
+@@ -1732,6 +1739,30 @@
+     }
+ }
+ 
++#ifdef DIRECT_DOMAIN_TO_LANIP
++static void get_lan_ip()
++{
++	int fd, errno;
++	struct ifreq ifr;
++
++	fd = socket(AF_INET, SOCK_DGRAM, 0);
++	ifr.ifr_addr.sa_family = AF_INET;
++	strncpy(ifr.ifr_name, "br0", IFNAMSIZ-1);
++	if( (errno=ioctl(fd, SIOCGIFADDR, &ifr)) != 0)
++	{
++		cprintf("%s():line%d:  ioctl Fail! Use DEFAULT br0 IP(192.168.1.1)\n", __FUNCTION__, __LINE__);
++		strcpy(lan_ip4addr, "192.168.1.1");
++	}
++	else
++	{
++		//cprintf("%s():line%d:  br0 IP is %s\n", __FUNCTION__, __LINE__, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
++		strcpy(lan_ip4addr, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
++	}
++	close(fd);
++	return;
++}
++#endif
++
+ #ifdef HAVE_DHCP
+ int make_icmp_sock(void)
+ {
+--- a/src/dnsmasq.h	2017-10-19 16:19:17.762320891 +0800
++++ b/src/dnsmasq.h	2017-10-19 16:25:10.718524793 +0800
+@@ -253,6 +253,19 @@
+ #define MS_DHCP   LOG_DAEMON
+ #define MS_SCRIPT LOG_MAIL
+ 
++#ifdef DIRECT_DOMAIN_TO_LANIP
++#define	LOCAL_IPV6_ADDR "fe80::1"
++#define INET_ADDRSTRLEN	16
++#define cprintf(fmt, args...) do { \
++        FILE *fp = fopen("/dev/console", "w"); \
++        if (fp) { \
++                fprintf(fp, fmt, ## args); \
++                fclose(fp); \
++        } \
++} while (0)
++char lan_ip4addr[INET_ADDRSTRLEN];
++#endif
++
+ struct all_addr {
+   union {
+     struct in_addr addr4;
+@@ -1127,6 +1140,9 @@
+ int is_rev_synth(int flag, struct all_addr *addr, char *name);
+ 
+ /* rfc1035.c */
++#ifdef DIRECT_DOMAIN_TO_LANIP
++#define	LOCAL_DNS_DOMAIN_NAME_PREFIX "mygateway.gateway"	//SEAN: TODO: suffix should be from ARC_LAN_0_DomainName
++#endif
+ int extract_name(struct dns_header *header, size_t plen, unsigned char **pp, 
+                  char *name, int isExtract, int extrabytes);
+ unsigned char *skip_name(unsigned char *ansp, struct dns_header *header, size_t plen, int extrabytes);
+--- a/src/rfc1035.c	2017-10-19 16:19:25.620406214 +0800
++++ b/src/rfc1035.c	2017-10-19 16:23:08.366431016 +0800
+@@ -1260,6 +1260,10 @@
+   struct mx_srv_record *rec;
+   size_t len;
+ 
++#ifdef DIRECT_DOMAIN_TO_LANIP
++  struct all_addr lan_addr;
++#endif
++
+   if (ntohs(header->ancount) != 0 ||
+       ntohs(header->nscount) != 0 ||
+       ntohs(header->qdcount) == 0 || 
+@@ -1300,6 +1304,45 @@
+       GETSHORT(qclass, p);
+ 
+       ans = 0; /* have we answered this question */
++
++#ifdef DIRECT_DOMAIN_TO_LANIP
++	if(strcasecmp(name, LOCAL_DNS_DOMAIN_NAME_PREFIX) == 0) //response "mygateway" directly.
++	{
++		//cprintf("%s:%d:  !!!!Found [%s]!!!!\n", __FUNCTION__, __LINE__, LOCAL_DNS_DOMAIN_NAME_PREFIX);
++		if(qtype == T_A || qtype == T_AAAA || qtype == T_ANY)
++		{
++			ans = 1;
++			if(qtype == T_A || qtype == T_ANY)
++			{
++				inet_aton(lan_ip4addr, &lan_addr.addr.addr4);
++				lan_addr.addr.addr4 = ntohl(lan_addr.addr.addr4);
++				//cprintf("%s:%d:  lan_ip4addr is %s, call add_resource_record(T_A)\n", __FUNCTION__, __LINE__, lan_ip4addr);
++				if(add_resource_record(header, limit, &trunc, nameoffset, &ansp,
++					0, NULL, T_A, C_IN, "4", &lan_addr))
++						anscount++;
++			}
++			if(qtype == T_AAAA || qtype == T_ANY)
++			{
++				inet_pton(AF_INET6, LOCAL_IPV6_ADDR, &lan_addr.addr.addr6);
++				//cprintf("%s:%d:  call add_resource_record(T_AAAA)\n", __FUNCTION__, __LINE__);
++				if(add_resource_record(header, limit, &trunc, nameoffset, &ansp,
++					0, NULL, T_AAAA, C_IN, "6", &lan_addr))
++					anscount++;
++			}
++		}
++		dryrun = 0;
++		break;
++	}
++	else
++	{
++		if(strcasestr(name, LOCAL_DNS_DOMAIN_NAME_PREFIX))
++		{
++			nxdomain = 1;		
++			dryrun = 0;		
++			break;
++		}
++	}
++#endif
+       
+       if (qtype == T_TXT || qtype == T_ANY)
+ 	{

@@ -1,0 +1,28 @@
+#!/bin/sh
+
+APPS_PATH=/opt
+APPS_RUN_DIR=$APPS_PATH/etc/init.d
+CHECKSUM_PREFIX="checksum_"
+APPS_DEV=`nvram get apps_dev`
+CHECKSUM_PREFIX="checksum_"
+
+if [ ! -d "$APPS_RUN_DIR" ] || [ -z $APPS_DEV ]; then
+        exit 1
+fi
+
+if [ ! -z $APPS_DEV ]; then
+	DEV_SN=`lsblk -o KNAME,SERIAL -n | grep ${APPS_DEV:0:3} | head -1 | awk '{print $2}'`
+	testPara=`mng_cli test "ASUS_checksum_"${DEV_SN}`
+	if [ $testPara == "existed" ]; then
+		CHECKSUM_PREFIX="checksum_"$DEV_SN"_"
+	fi
+fi
+
+for file in $APPS_RUN_DIR/S*; do
+	VarName=$CHECKSUM_PREFIX`basename $file`
+	CheckSum=`md5sum $file | awk '{print $1}'`
+	VfySum=`nvram get $VarName`
+	if [ $VfySum"" == "$CheckSum" ]; then
+		$file restart
+	fi
+done

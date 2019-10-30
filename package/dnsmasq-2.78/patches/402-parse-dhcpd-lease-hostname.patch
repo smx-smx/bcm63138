@@ -1,0 +1,178 @@
+--- a/src/rfc1035.c	2017-10-19 17:36:30.526854400 +0800
++++ b/src/rfc1035.c	2017-10-19 17:46:59.408111229 +0800
+@@ -16,6 +16,84 @@
+ 
+ #include "dnsmasq.h"
+ 
++/*int add_resource_record(struct dns_header *header, char *limit, int *truncp, 
++			       unsigned int nameoffset, unsigned char **pp, 
++			       unsigned long ttl, unsigned int *offset, unsigned short type, 
++			       unsigned short class, char *format, ...);*/
++
++#define CHECK_LEN(header, pp, plen, len) \
++    ((size_t)((pp) - (unsigned char *)(header) + (len)) <= (plen))
++
++#define ADD_RDLEN(header, pp, plen, len) \
++    (!CHECK_LEN(header, pp, plen, len) ? 0 : (long)((pp) += (len)), 1)
++
++/*
++  pete_zhang 2017.05.16 asus-issue(ticket-5922)
++  Bug description:
++  [JIRA] DSL-AC87VG ASU1-17 : DNS name resolution of DHCP-assigned local IP addresses does not work.
++  Solution: Try to find query name from dhcp leases firstly
++*/
++#ifdef ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++
++#define PATH_DHCPD_CLIENTS_FILE "/etc/dhcpd.clients"
++
++struct iaddr {
++    unsigned len; 
++    unsigned char iabuf [16];
++};
++
++struct lease_t {
++    unsigned char chaddr[16];
++    struct iaddr yiaddr;
++    u_int32_t expires;
++    char hostname[64];
++};
++
++/* piaddr() turns an iaddr structure into a printable address. */
++/* XXX: should use a const pointer rather than passing the structure */
++const char *piaddr(const struct iaddr addr) 
++{
++        static char  pbuf[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")]; /* "255.255.255.255" */
++
++        /* INSIST((addr.len == 0) || (addr.len == 4) || (addr.len == 16)); */
++
++        if (addr.len == 0) {
++                return "<null address>";
++        }
++        if (addr.len == 4) {
++                return inet_ntop(AF_INET, addr.iabuf, pbuf, sizeof(pbuf));
++        }
++        if (addr.len == 16) {
++                return inet_ntop(AF_INET6, addr.iabuf, pbuf, sizeof(pbuf));
++        }
++
++        cprintf("%s:%d: dnsmasq Invalid address length %d.\n", __func__, __LINE__, addr.len);
++        /* quell compiler warnings */
++        return NULL;
++}
++
++/*
++ * Convert Ethernet address binary data to string representation
++ * @param   e   binary data
++ * @param   a   string in xx:xx:xx:xx:xx:xx notation
++ * @return  a
++ */
++char *
++ether_etoa(const unsigned char *e, char *a) 
++{
++    char *c = a;
++    int i;
++
++    for (i = 0; i < ETHER_ADDR_LEN; i++) {
++        if (i) 
++            *c++ = ':';
++        c += sprintf(c, "%02X", e[i] & 0xff);
++    }   
++    return a;
++}
++#endif //ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++/*end pete_zhang 2017.05.10*/
++
+ int extract_name(struct dns_header *header, size_t plen, unsigned char **pp, 
+ 		 char *name, int isExtract, int extrabytes)
+ {
+@@ -1389,6 +1467,22 @@
+ 		      time_t now, int ad_reqd, int do_bit, int have_pseudoheader) 
+ {
+   char *name = daemon->namebuff;
++/*
++  pete_zhang 2017.05.16 asus-issue(ticket-5922)
++  Bug description:
++  [JIRA] DSL-AC87VG ASU1-17 : DNS name resolution of DHCP-assigned local IP addresses does not work.
++  Solution: Try to find query name from dhcp leases firstly
++*/
++#ifdef ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++  FILE *fp = NULL;
++  struct lease_t lease, tmp_lease;
++  char *end_hostname = NULL, *lan_ipv4_addr = NULL;
++  char lan_mac[20] = {0};  
++  int found_hostname = 0;
++  unsigned long lan_expires = 0;
++  struct all_addr lan_asus_addr;
++#endif //ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++/*end pete_zhang 2017.05.10*/
+   unsigned char *p, *ansp;
+   unsigned int qtype, qclass;
+   struct all_addr addr;
+@@ -1484,7 +1578,66 @@
+ 		}
+ 	}
+ #endif
+-      
++ 
++/*
++  pete_zhang 2017.05.16 asus-issue(ticket-5922)
++  Bug description:
++  [JIRA] DSL-AC87VG ASU1-17 : DNS name resolution of DHCP-assigned local IP addresses does not work.
++  Solution: Try to find query name from dhcp leases firstly
++*/
++#ifdef ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++	/* guang_zhao 20160908, modify mini dns support to fix the speedhome.bridge issue.*/
++	if(qtype == T_A || qtype == T_ANY)
++	{
++		memset(&lan_ipv4_addr, 0, sizeof(lan_ipv4_addr));
++		memset(&lan_mac, 0, sizeof(lan_mac));
++		memset(&lease, 0, sizeof(lease));
++		memset(&tmp_lease, 0, sizeof(tmp_lease));
++
++		if((fp = fopen(PATH_DHCPD_CLIENTS_FILE, "r")))
++		{
++			/* guang_zhao 20130105, search and find the lan pc name from dhcpd table and ipv6 neigh table.*/
++			while(fread(&tmp_lease, sizeof(tmp_lease), 1, fp))
++			{
++				ether_etoa(tmp_lease.chaddr, lan_mac);
++				if(!strcmp(lan_mac,"00:00:00:00:00:00"))
++					continue;
++
++				lan_expires = ntohl(tmp_lease.expires);
++				if(lan_expires == 0)
++					continue;
++
++				if(!strcasecmp(name, tmp_lease.hostname))
++				{
++					found_hostname++;
++					memcpy(&lease, &tmp_lease, sizeof(tmp_lease));
++				}
++			}
++			fclose(fp);
++			if(found_hostname)
++			{
++				ans = 1;
++				if(qtype == T_A || qtype == T_ANY)
++				{
++					lan_ipv4_addr = piaddr(lease.yiaddr);
++					inet_aton(lan_ipv4_addr, &lan_asus_addr.addr.addr4);
++					if(add_resource_record(header, limit, &trunc, nameoffset, &ansp,
++						180, NULL, T_A, C_IN, "4", &lan_asus_addr))
++						anscount++;
++				}
++			}
++		}
++
++		if(ans)
++		{
++			dryrun = 0;
++			break;
++		}
++	}
++	/* end of mini dns support.*/
++#endif //ASUS_DIRECT_DOMAIN_TO_DHCPD_LEASE_HOSTNAME
++/*end pete_zhang 2017.05.10*/
++     
+       if (qtype == T_TXT || qtype == T_ANY)
+ 	{
+ 	  struct txt_record *t;

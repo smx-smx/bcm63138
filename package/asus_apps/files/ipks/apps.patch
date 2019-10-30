@@ -1,0 +1,49 @@
+diff -Naur asusware.arm/etc/asus_script/asus_check_general asusware.arm.ok/etc/asus_script/asus_check_general
+--- asusware.arm/etc/asus_script/asus_check_general	2014-10-31 00:49:02.000000000 +0800
++++ asusware.arm.ok/etc/asus_script/asus_check_general	2016-01-13 11:08:20.236208263 +0800
+@@ -3,13 +3,11 @@
+ APP_UCLIBC_VERSION=0.9.28
+ 
+ PATH=/sbin:/usr/sbin:/bin:/usr/bin:/opt/bin
+-
+ APPS_MOUNTED_PATH=`nvram get apps_mounted_path`
+ APPS_INSTALL_FOLDER=`nvram get apps_install_folder`
+ APPS_INSTALL_PATH=$APPS_MOUNTED_PATH/$APPS_INSTALL_FOLDER
+ APPS_DEV=`nvram get apps_dev`
+ APPS_PATH=${APPS_MOUNTED_PATH:9}
+-
+ MEMORY_TOTAL=`free | head -2 |tail -1 |awk '{print $2}'`
+ 
+ LANGUAGE_R=`nvram get preferred_lang`
+@@ -45,7 +43,7 @@
+ case "$1" in
+   
+   general-check)
+-	if [ "$Utility_CHECK_TMP_1" == "" ] || [ "$LOCAL_DOMAIN_TMP_1" == "" ] || [ "$HTTP_AUTOLOGOUT_TMP" == "" ] || [ "$MISCR_HTTPSPORT_X_TMP" == "" || [ "$SW_MODE_TMP" == "" ] ] ; then
++	if [ -f "$dir_router_file" ] && [ "$Utility_CHECK_TMP_1" == "" ] || [ "$LOCAL_DOMAIN_TMP_1" == "" ] || [ "$HTTP_AUTOLOGOUT_TMP" == "" ] || [ "$MISCR_HTTPSPORT_X_TMP" == "" || [ "$SW_MODE_TMP" == "" ] ] ; then
+ 		rm -rf /tmp/asus_router.conf
+ 	fi
+ 	if [ ! -f "$dir_router_file" ]; then
+diff -Naur asusware.arm/etc/init.d/S50asuslighttpd asusware.arm.ok/etc/init.d/S50asuslighttpd
+--- asusware.arm/etc/init.d/S50asuslighttpd	2014-10-30 11:53:32.000000000 +0800
++++ asusware.arm.ok/etc/init.d/S50asuslighttpd	2016-01-12 19:15:20.000000000 +0800
+@@ -295,7 +295,7 @@
+     #echo "Restarting DM firewall: "
+ 	killall -SIGTERM asus_lighttpd&
+ 	#killall -SIGUSR2 dm2_detect&
+-	rm -rf /tmp/getdiskinfo_lock&
++	#rm -rf /tmp/getdiskinfo_lock&
+ 	rm -rf /tmp/APPS/DM2/Status/cgi_running&
+ 	rm -rf /tmp/APPS/DM2/Config/dm2_general_protected &
+ 	rm -rf /tmp/APPS/DM2/Config/dm2_detect_protected &
+--- asusware.arm/S50asuslighttpd.1	2016-01-13 02:51:52.000000000 +0800
++++ asusware.arm.ok/S50asuslighttpd.1	2016-01-12 19:05:24.000000000 +0800
+@@ -295,7 +295,7 @@
+     #echo "Restarting DM firewall: "
+ 	killall -SIGTERM asus_lighttpd&
+ 	#killall -SIGUSR2 dm2_detect&
+-	rm -rf /tmp/getdiskinfo_lock&
++	#rm -rf /tmp/getdiskinfo_lock&
+ 	rm -rf /tmp/APPS/DM2/Status/cgi_running&
+ 	rm -rf /tmp/APPS/DM2/Config/dm2_general_protected &
+ 	rm -rf /tmp/APPS/DM2/Config/dm2_detect_protected &
